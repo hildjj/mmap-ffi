@@ -26,12 +26,19 @@ const LIBC_LAYOUT = {
   errno: { type: 'pointer' },
 } as const;
 
+/**
+ * How do you expect to use the memory?
+ */
 export enum MmapFlags {
   ReadOnly,
   WriteOnly,
   ReadWrite,
 }
 
+/**
+ * Options for mapping files.  If you just want read-only access to the whole
+ * file on a supported OS, none of these options are needed.
+ */
 export interface MMapOptions {
   /**
    * Read, write, or both?
@@ -73,6 +80,9 @@ export enum Advice {
   DONTNEED = 4,
 }
 
+/**
+ * Manage a memory-mapped file using mmap(2) and madvise(2).
+ */
 export class MMap {
   #fileName: string;
   #fd = -1;
@@ -82,6 +92,12 @@ export class MMap {
   #libc: Deno.DynamicLibrary<typeof LIBC_LAYOUT> | undefined;
   #opts: Required<MMapOptions>;
 
+  /**
+   * Perform setup, including linking to libc.
+   *
+   * @param fileName The file to map.
+   * @param opts Options.
+   */
   public constructor(fileName: string | URL, opts: MMapOptions = {}) {
     const { os } = Deno.build;
     this.#opts = {
@@ -100,6 +116,11 @@ export class MMap {
     this.#libc = Deno.dlopen(this.#opts.libCname, LIBC_LAYOUT);
   }
 
+  /**
+   * Map the file into memory.
+   *
+   * @returns Promise fulfilled with a buffer that backs into the file.
+   */
   public async map(): Promise<Uint8Array> {
     if (!this.#libc) {
       throw new Error('Already closed');
@@ -139,6 +160,12 @@ export class MMap {
     return buf;
   }
 
+  /**
+   * Give advice to the kernel about how the memory that was mapped will
+   * be used.
+   *
+   * @param advice Usage pattern.
+   */
   advise(advice: Advice): void {
     if (!this.#libc) {
       throw new Error('Already closed');
@@ -152,10 +179,20 @@ export class MMap {
     }
   }
 
+  /**
+   * Calls close when the variable goes out of scope, if you used `using`.
+   * @example
+   * {using map = new MMap();} // No need to call close() explicitly.
+   */
   [Symbol.dispose](): void {
     this.close();
   }
 
+  /**
+   * Close the file handle, unmap the memory region, and close the libc
+   * handle. Neither the class nor the memory allocated by map() may be used
+   * after this.
+   */
   close(): void {
     if (this.#mapped) {
       assert(this.#libc);

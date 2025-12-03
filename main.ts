@@ -196,19 +196,19 @@ export class MMap {
       case MmapFlags.ReadOnly:
         this.#prot = PROT_READ;
         flags = O_RDONLY;
-        await this.#permit({name: 'read', path: this.#fileName});
+        await this.#permit({ name: 'read', path: this.#fileName });
         break;
       case MmapFlags.ReadWrite:
         this.#prot = PROT_READ | PROT_WRITE;
         flags = O_RDWR;
-        await this.#permit({name: 'read', path: this.#fileName});
-        await this.#permit({name: 'write', path: this.#fileName});
+        await this.#permit({ name: 'read', path: this.#fileName });
+        await this.#permit({ name: 'write', path: this.#fileName });
         break;
       case MmapFlags.WriteOnly:
         this.#prot = PROT_WRITE;
         // Required for mmap to work.
         flags = O_RDWR;
-        await this.#permit({name: 'write', path: this.#fileName});
+        await this.#permit({ name: 'write', path: this.#fileName });
         break;
       default:
         throw new Error(`Invalid flags: ${this.#opts.flags}`);
@@ -229,7 +229,9 @@ export class MMap {
     // We are going around the Deno permissions, so let's add them back in.
     const rd = await Deno.permissions.request(desc);
     if (rd.state !== 'granted') {
-      throw new Deno.errors.PermissionDenied(`Need ${desc.name} permission for ${this.#fileName}, but state is "${rd.state}".`);
+      throw new Deno.errors.PermissionDenied(
+        `Need ${desc.name} permission for ${this.#fileName}, but state is "${rd.state}".`,
+      );
     }
   }
 

@@ -16,8 +16,7 @@
   },
   "tasks": {
     "check": "deno fmt --check && deno lint && deno check **/*.ts",
-    "lint": "deno lint",
-    "example": "deno -allow-ffi --allow-read=deno.jsonc example.ts",
+    "example": "deno --allow-ffi --allow-read=deno.jsonc example.ts",
     "test": "deno test --coverage --clean --allow-ffi --allow-read=main_test.ts --allow-read=__UNKNOWN___FILE__BAD --allow-read=deno.jsonc --allow-write=deno.jsonc --allow-read=__UNKNOWN___FILE__GOOD --allow-write=__UNKNOWN___FILE__GOOD"
   },
   "imports": {

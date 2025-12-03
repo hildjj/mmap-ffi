@@ -36,3 +36,6 @@ pre-built for my platform.
 # License
 
 MIT
+
+[![Test Deno Module](https://github.com/hildjj/mmap-ffi/actions/workflows/deno.yml/badge.svg)](https://github.com/hildjj/mmap-ffi/actions/workflows/deno.yml)
+[![codecov](https://codecov.io/gh/hildjj/mmap-ffi/graph/badge.svg?token=TMSJBTO73Z)](https://codecov.io/gh/hildjj/mmap-ffi)

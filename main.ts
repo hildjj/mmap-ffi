@@ -1,58 +1,17 @@
 import { assert } from '@std/assert';
-import { getPortability, type Portability } from './portability.ts';
 import { fromFileUrl } from '@std/path/from-file-url';
-
-export type {
-  Portability,
-};
-
-// TODO(hildjj): Fill this out for every supported OS
-const PORTABILITY: Record<string, Portability> = {
-  'aarch64-apple-darwin': {
-    statOffset: 96,
-    statSize: 144,
-    O_RDONLY: 0,
-    O_WRONLY: 1,
-    O_RDWR: 2,
-    PROT_READ: 1,
-    PROT_WRITE: 2,
-    MADV_NORMAL: 0,
-    MADV_RANDOM: 1,
-    MADV_SEQUENTIAL: 2,
-    MADV_WILLNEED: 3,
-    MADV_DONTNEED: 4,
-    MAP_FAILED: -1,
-    MAP_SHARED: 1,
-  },
-  'aarch64-unknown-linux-gnu': {
-    statOffset: 48,
-    statSize: 128,
-    O_RDONLY: 0,
-    O_WRONLY: 1,
-    O_RDWR: 2,
-    PROT_READ: 1,
-    PROT_WRITE: 2,
-    MADV_NORMAL: 0,
-    MADV_RANDOM: 1,
-    MADV_SEQUENTIAL: 2,
-    MADV_WILLNEED: 3,
-    MADV_DONTNEED: 4,
-    MAP_FAILED: -1,
-    MAP_SHARED: 1,
-  },
-  'x86_64-unknown-linux-gnu': {
-    statOffset: 48, statSize: 144,
-    O_RDONLY: 0, O_WRONLY: 1, O_RDWR: 2,
-    PROT_READ: 1, PROT_WRITE: 2,
-    MADV_NORMAL: 0, MADV_RANDOM: 1, MADV_SEQUENTIAL: 2, MADV_WILLNEED: 3, MADV_DONTNEED: 4,
-    MAP_FAILED: -1, MAP_SHARED: 1,
-  }
-};
 
 const libCnames: Record<string, string> = {
   'darwin': 'libSystem.dylib',
   'linux': 'libc.so.6',
 };
+
+const O_RDONLY = 0;
+const O_RDWR = 2;
+const PROT_READ = 1;
+const PROT_WRITE = 2;
+const MAP_SHARED = 1;
+const MAP_FAILED = Deno.UnsafePointer.create(-1n);
 
 const LIBC_LAYOUT = {
   open: { parameters: ['buffer', 'i32', 'i32'], result: 'i32' },
@@ -63,7 +22,6 @@ const LIBC_LAYOUT = {
   madvise: { parameters: ['pointer', 'usize', 'i32'], result: 'i32' },
   munmap: { parameters: ['pointer', 'usize'], result: 'i32' },
   close: { parameters: ['i32'], result: 'i32' },
-  fstat: { parameters: ['i32', 'pointer'], result: 'i32' },
   strerror: { parameters: ['i32'], result: 'pointer' },
   errno: { type: 'pointer' },
 } as const;
@@ -95,65 +53,42 @@ export interface MMapOptions {
    */
   size?: bigint;
   /**
-   * Set of portability parameters, discovered with offset.c.  If your system
-   * is not supported out of the box, and you don't want offset.c to be compiled
-   * and run on your target system, supply an object here consisting of
-   * `{[Deno.build.target]: {...}}`.  If supplied, this map will *replace*
-   * the existing set of known targets, which can be accessed from
-   * MMap.PORTABILITY if needed.
-   */
-  portability?: Record<string, Portability>;
-  /**
    * Override the selection of libSystem.dylib on MacOs or libc.so.6 on linux
    * by supplying a libc name that works on your system.
    */
   libCname?: string;
-  /**
-   * This option is only for testing.  It can be used to override
-   *
-   * @default Deno.build.target
-   */
-  target?: string;
-  /**
-   * Which C compiler to use, if needed?
-   *
-   * @default Deno.env.get('CC') ?? 'gcc'
-   */
-  CC?: string;
 }
 
 const TE = new TextEncoder();
 
+/**
+ * What kind of advice to give the kernel?  These should match the
+ * POSIX definitions.
+ */
 export enum Advice {
-  NORMAL,
-  RANDOM,
-  SEQUENTIAL,
-  WILLNEED,
-  DONTNEED,
+  NORMAL = 0,
+  RANDOM = 1,
+  SEQUENTIAL = 2,
+  WILLNEED = 3,
+  DONTNEED = 4,
 }
 
 export class MMap {
-  public static PORTABILITY = PORTABILITY;
   #fileName: string;
   #fd = -1;
   #size: bigint;
   #ptr = Deno.UnsafePointer.create(-1n);
   #prot = 0;
   #libc: Deno.DynamicLibrary<typeof LIBC_LAYOUT> | undefined;
-  #mapFailed = Deno.UnsafePointer.create(-1n);
-  #port: Portability | undefined;
   #opts: Required<MMapOptions>;
 
   public constructor(fileName: string | URL, opts: MMapOptions = {}) {
-    const { target, os } = Deno.build;
+    const { os } = Deno.build;
     this.#opts = {
       flags: MmapFlags.ReadOnly,
       offset: 0n,
       size: -1n,
-      target,
-      portability: MMap.PORTABILITY,
       libCname: libCnames[os],
-      CC: Deno.env.get('CC') ?? 'gcc',
       ...opts,
     };
 
@@ -169,22 +104,21 @@ export class MMap {
     if (!this.#libc) {
       throw new Error('Already closed');
     }
-    await this.#init();
-    assert(this.#port);
+    await this.#ensureOpen();
 
     if (this.#mapped) {
       throw new Error('Already mapped');
     }
 
     if (this.#size < 0n) {
-      this.#size = this.#fileSize();
+      this.#size = await this.#fileSize();
     }
 
     this.#ptr = this.#libc.symbols.mmap(
       null,
       this.#size,
       this.#prot,
-      this.#port.MAP_SHARED,
+      MAP_SHARED,
       this.#fd,
       this.#opts.offset,
     );
@@ -192,10 +126,17 @@ export class MMap {
       this.#perror('mmap');
     }
     assert(this.#ptr);
-    return new Uint8Array(Deno.UnsafePointerView.getArrayBuffer(
+    const buf = new Uint8Array(Deno.UnsafePointerView.getArrayBuffer(
       this.#ptr,
       Number(this.#size),
     ));
+
+    // @ts-expect-error For testing only.
+    if (typeof this.#opts.RESET_SIZE === 'bigint') {
+      // @ts-expect-error For testing only.
+      this.#size = this.#opts.RESET_SIZE;
+    }
+    return buf;
   }
 
   advise(advice: Advice): void {
@@ -205,38 +146,21 @@ export class MMap {
     if (!this.#mapped) {
       throw new Error('Must call map before advise');
     }
-    assert(this.#port);
 
-    let ad = 0;
-    switch (advice) {
-      case Advice.NORMAL:
-        ad = this.#port.MADV_NORMAL;
-        break;
-      case Advice.RANDOM:
-        ad = this.#port.MADV_RANDOM;
-        break;
-      case Advice.SEQUENTIAL:
-        ad = this.#port.MADV_SEQUENTIAL;
-        break;
-      case Advice.WILLNEED:
-        ad = this.#port.MADV_WILLNEED;
-        break;
-      case Advice.DONTNEED:
-        ad = this.#port.MADV_DONTNEED;
-        break;
-      default:
-        throw new Error(`Invalid advice: ${advice}`);
-    }
-    if (this.#libc.symbols.madvise(this.#ptr, this.#size, ad) !== 0) {
+    if (this.#libc.symbols.madvise(this.#ptr, this.#size, advice) !== 0) {
       this.#perror('madvise');
     }
+  }
+
+  [Symbol.dispose](): void {
+    this.close();
   }
 
   close(): void {
     if (this.#mapped) {
       assert(this.#libc);
       const munmapRes = this.#libc.symbols.munmap(this.#ptr, this.#size);
-      this.#ptr = this.#mapFailed;
+      this.#ptr = MAP_FAILED;
       if (munmapRes !== 0) {
         this.#perror('munmap');
       }
@@ -258,41 +182,32 @@ export class MMap {
   }
 
   get #mapped(): boolean {
-    return !Deno.UnsafePointer.equals(this.#ptr, this.#mapFailed);
+    return !Deno.UnsafePointer.equals(this.#ptr, MAP_FAILED);
   }
 
-  async #init(): Promise<void> {
-    assert(this.#libc);
-    if (this.#port) {
+  async #ensureOpen(): Promise<void> {
+    if (this.#fd >= 0) {
       return;
     }
-
-    const { target, portability } = this.#opts;
-    this.#port = portability[target];
-    if (!this.#port) {
-      this.#port = await getPortability(this.#opts);
-      MMap.PORTABILITY[target] = this.#port; // Cache
-    }
-
-    this.#mapFailed = Deno.UnsafePointer.create(BigInt(this.#port.MAP_FAILED));
-    this.#ptr = this.#mapFailed;
+    assert(this.#libc);
 
     let flags = 0;
     switch (this.#opts.flags) {
       case MmapFlags.ReadOnly:
-        this.#prot = this.#port.PROT_READ;
-        flags = this.#port.O_RDONLY;
+        this.#prot = PROT_READ;
+        flags = O_RDONLY;
         await this.#permit({name: 'read', path: this.#fileName});
         break;
       case MmapFlags.ReadWrite:
-        this.#prot = this.#port.PROT_READ | this.#port.PROT_WRITE;
-        flags = this.#port.O_RDWR;
+        this.#prot = PROT_READ | PROT_WRITE;
+        flags = O_RDWR;
         await this.#permit({name: 'read', path: this.#fileName});
         await this.#permit({name: 'write', path: this.#fileName});
         break;
       case MmapFlags.WriteOnly:
-        this.#prot = this.#port.PROT_WRITE;
-        flags = this.#port.O_WRONLY;
+        this.#prot = PROT_WRITE;
+        // Required for mmap to work.
+        flags = O_RDWR;
         await this.#permit({name: 'write', path: this.#fileName});
         break;
       default:
@@ -305,25 +220,16 @@ export class MMap {
     }
   }
 
-  #fileSize(): bigint {
-    assert(this.#libc);
-    assert(this.#port);
-    const statBuf = new Uint8Array(this.#port.statSize);
-    const statPtr = Deno.UnsafePointer.of(statBuf);
-    if (this.#libc.symbols.fstat(this.#fd, statPtr) !== 0) {
-      this.#perror('fstat');
-    }
-    return new DataView(statBuf.buffer).getBigUint64(
-      this.#port.statOffset,
-      true,
-    );
+  async #fileSize(): Promise<bigint> {
+    const stat = await Deno.stat(this.#fileName);
+    return BigInt(stat.size);
   }
 
   async #permit(desc: Deno.PermissionDescriptor): Promise<void> {
     // We are going around the Deno permissions, so let's add them back in.
     const rd = await Deno.permissions.request(desc);
     if (rd.state !== 'granted') {
-      throw new Deno.errors.PermissionDenied(`Need ${desc.name} permission for ${this.#fileName}`);
+      throw new Deno.errors.PermissionDenied(`Need ${desc.name} permission for ${this.#fileName}, but state is "${rd.state}".`);
     }
   }
 

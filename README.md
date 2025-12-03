@@ -7,7 +7,7 @@ deno, without needing any native code.
 ## Example
 
 ```ts
-import {MMap} from '@cto-af/mmap-ffi';
+import { MMap } from '@cto-af/mmap-ffi';
 
 using m = new MMap('myFile');
 const buf = await m.map(); // Uint8Array

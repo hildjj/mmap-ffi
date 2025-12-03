@@ -11,7 +11,7 @@
       "*.ts",
       "!*_test.ts",
       "LICENSE.md",
-      "offset.c"
+      "README.md"
     ]
   },
   "tasks": {

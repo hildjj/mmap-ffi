@@ -1,3 +1,8 @@
+/**
+ * Map a file into memory with mmap(2), using nothing but Deno FFI.
+ * @module
+ */
+
 import { assert } from '@std/assert';
 import { fromFileUrl } from '@std/path/from-file-url';
 

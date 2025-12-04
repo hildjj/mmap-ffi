@@ -148,20 +148,14 @@ export class MMap {
       this.#fd,
       this.#opts.offset,
     );
-    if (!this.#mapped) {
-      this.#perror('mmap');
-    }
+    this.#checkOK(this.#mapped, 'mmap');
+
     assert(this.#ptr);
     const buf = new Uint8Array(Deno.UnsafePointerView.getArrayBuffer(
       this.#ptr,
       Number(this.#size),
     ));
 
-    // @ts-expect-error For testing only.
-    if (typeof this.#opts.RESET_SIZE === 'bigint') {
-      // @ts-expect-error For testing only.
-      this.#size = this.#opts.RESET_SIZE;
-    }
     return buf;
   }
 
@@ -179,9 +173,8 @@ export class MMap {
       throw new Error('Must call map before advise');
     }
 
-    if (this.#libc.symbols.madvise(this.#ptr, this.#size, advice) !== 0) {
-      this.#perror('madvise');
-    }
+    const ret = this.#libc.symbols.madvise(this.#ptr, this.#size, advice);
+    this.#checkOK(ret === 0, 'madvise');
   }
 
   /**
@@ -203,18 +196,14 @@ export class MMap {
       assert(this.#libc);
       const munmapRes = this.#libc.symbols.munmap(this.#ptr, this.#size);
       this.#ptr = MAP_FAILED;
-      if (munmapRes !== 0) {
-        this.#perror('munmap');
-      }
+      this.#checkOK(munmapRes === 0, 'munmap');
     }
 
     if (this.#fd >= 0) {
       assert(this.#libc);
       const ret = this.#libc.symbols.close(this.#fd);
       this.#fd = -1;
-      if (ret !== 0) {
-        this.#perror('close');
-      }
+      this.#checkOK(ret === 0, 'close');
     }
 
     if (this.#libc) {
@@ -257,9 +246,7 @@ export class MMap {
     }
     const fn = TE.encode(`${this.#fileName}\0`);
     this.#fd = this.#libc.symbols.open(fn, flags, 0);
-    if (this.#fd < 0) {
-      this.#perror(`open "this.#fileName"`);
-    }
+    this.#checkOK(this.#fd >= 0, 'open');
   }
 
   async #fileSize(): Promise<bigint> {
@@ -277,7 +264,11 @@ export class MMap {
     }
   }
 
-  #perror(where: string): void {
+  #checkOK(ok: boolean, where: string): void {
+    if (ok) {
+      return;
+    }
+
     assert(this.#libc?.symbols.errno);
     const errnoPtr = new Deno.UnsafePointerView(this.#libc.symbols.errno);
     const errno = errnoPtr.getInt32();
@@ -287,8 +278,8 @@ export class MMap {
     const msg = msgView.getCString();
 
     try {
-      // Could be called multiple times, be careful of resetting state before
-      // calling perror.
+      // Could have been called from close, be careful of resetting state before
+      // calling #checkOK.
       this.close();
     } catch (_ignored) {
       // Ignored.

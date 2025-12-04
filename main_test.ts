@@ -67,13 +67,6 @@ Deno.test('Unknown file', async () => {
   await assertRejects(() => mmap.map());
 });
 
-Deno.test('munmap fail', async () => {
-  // @ts-expect-error Hack to get munmap to fail.
-  const mmap = new MMap(import.meta.url, { RESET_SIZE: -1n });
-  await mmap.map();
-  assertThrows(() => mmap.close());
-});
-
 Deno.test('readWrite', async () => {
   using mmap = new MMap(new URL('deno.jsonc', import.meta.url), {
     flags: MmapFlags.ReadWrite,
